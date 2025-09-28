@@ -1,0 +1,391 @@
+<!doctype html><html><head><meta charset='utf-8'><script>(function(){
+      try{
+        const send=(t,p)=>parent.postMessage({type:t,payload:p},'*');
+
+        // Console
+        ['log','info','warn','error'].forEach(k=>{
+          const o=console[k];
+          console[k]=function(){
+            try{
+              send('console',{level:k,args:[...arguments].map(a=>{try{return typeof a==='string'?a:JSON.stringify(a)}catch(e){return String(a)}})});
+            }catch(e){}
+            o.apply(console,arguments);
+          };
+        });
+
+        // Errors
+        window.addEventListener('error',e=>send('error',{message:e.message,stack:e.error&&e.error.stack,lineno:e.lineno,colno:e.colno,filename:e.filename}));
+        window.addEventListener('unhandledrejection',e=>send('error',{message:String(e.reason||'Unhandled rejection')}));
+
+        // Network: fetch
+        try{
+          const ofetch = window.fetch;
+          window.fetch = async function(){
+            const u = arguments[0]; const init = arguments[1]||{};
+            send('net',{kind:'fetch',url:String(u),method:(init.method||'GET')});
+            try{
+              const res = await ofetch.apply(this, arguments);
+              send('net',{kind:'fetch-resp',url:String(u),status:res.status});
+              return res;
+            }catch(err){
+              send('net',{kind:'fetch-error',url:String(u),error:String(err)});
+              throw err;
+            }
+          };
+        }catch(_){}
+
+        // Network: XHR
+        try{
+          const OXHR = XMLHttpRequest;
+          XMLHttpRequest = function(){
+            const x = new OXHR(); let url=''; let method='GET';
+            const oopen = x.open;
+            x.open = function(m,u){ method=m; url=u; return oopen.apply(this,arguments); };
+            x.addEventListener('load', ()=>send('net',{kind:'xhr',url:String(url),method:method,status:x.status}));
+            x.addEventListener('error',()=>send('net',{kind:'xhr-error',url:String(url),method:method}));
+            return x;
+          };
+        }catch(_){}
+      }catch(_){}
+    })();</script></head><body><!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Pro HTML Viewer • Left Console / Right Preview</title>
+<style>
+  :root{
+    --bg:#070b16; --panel:#0e1423; --panel-2:#0b1120; --edge:rgba(255,255,255,.18);
+    --text:#eaf2ff; --muted:#9fb0d8; --acc:#6ae0ff; --neon:#6ae0ff; --neon2:#7c4dff;
+    --good:#44d18a; --warn:#f2c94c; --bad:#ff6b6b; --glass:rgba(255,255,255,.06)
+  }
+  *{box-sizing:border-box}
+  html,body{height:100%}
+  body{margin:0;font-family:ui-sans-serif,system-ui,Inter,Segoe UI,Roboto;background:radial-gradient(80% 140% at 10% -10%,#0b1226 0%,#070b16 50%,#04060c 100%);color:var(--text)}
+
+  .app{display:grid;grid-template-rows:auto 1fr;min-height:100%}
+  header{position:sticky;top:0;z-index:30;background:linear-gradient(180deg,rgba(7,11,22,.9),rgba(7,11,22,.66));border-bottom:1px solid var(--edge);backdrop-filter:blur(10px) saturate(1.1)}
+  .bar{display:flex;gap:10px;align-items:center;flex-wrap:wrap;padding:10px 12px}
+  .title{font-weight:700;letter-spacing:.4px;margin-right:auto;opacity:.95}
+  .btn{appearance:none;border:1px solid var(--edge);background:linear-gradient(180deg,rgba(255,255,255,.12),rgba(255,255,255,.04));color:var(--text);padding:8px 12px;border-radius:14px;cursor:pointer;user-select:none;position:relative;box-shadow:inset 0 1px 0 rgba(255,255,255,.2),0 8px 24px rgba(0,0,0,.35);transition:transform .08s ease, box-shadow .15s ease;font-weight:600}
+  .btn:hover{transform:translateY(-1px);box-shadow:inset 0 1px 0 rgba(255,255,255,.35),0 12px 36px rgba(0,0,0,.4)}
+  .btn:active{transform:translateY(0)}
+  input[type=file]{display:none}
+
+  .input{display:flex;align-items:center;gap:8px;border:1px solid var(--edge);border-radius:12px;padding:6px 10px;background:rgba(255,255,255,.05)}
+  .input input{background:transparent;border:none;outline:none;color:var(--text)}
+  .toggle{display:inline-flex;align-items:center;gap:8px;padding:6px 10px;border:1px solid var(--edge);border-radius:999px;background:rgba(255,255,255,.05)}
+  .toggle input{accent-color:var(--acc)}
+  .pill{padding:.2rem .55rem;border:1px solid var(--edge);border-radius:999px;font-size:.8rem;color:var(--muted)}
+  .kbd{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;background:rgba(255,255,255,.08);border:1px solid var(--edge);padding:.1rem .35rem;border-radius:6px}
+
+  /* MAIN LAYOUT: left (editor+consoles), right (preview) */
+  .main{display:grid;gap:12px;padding:12px;grid-template-columns: minmax(420px, 0.95fr) minmax(520px, 1.05fr);align-items:stretch}
+  .pane{display:flex;flex-direction:column;min-height:0;border:1px solid var(--edge);border-radius:16px;overflow:hidden;background:linear-gradient(180deg,rgba(255,255,255,.07),rgba(255,255,255,.03))}
+  .head{display:flex;align-items:center;justify-content:space-between;padding:10px 12px;border-bottom:1px solid var(--edge)}
+  .body{flex:1;min-height:0}
+
+  /* Left stack (editor on top, consoles below) */
+  .leftStack{display:flex;flex-direction:column;gap:10px;padding:10px;height:100%}
+  .editorWrap,.debugWrap{display:flex;flex-direction:column;min-height:0;border:1px solid var(--edge);border-radius:12px;overflow:hidden;background:linear-gradient(180deg,rgba(17,24,48,.8),rgba(11,17,32,.8))}
+  .editorWrap{flex:2}
+  .debugWrap{flex:1}
+  .editorWrap:hover{flex:3;transition:flex .25s ease}
+  .debugWrap:hover{flex:3;transition:flex .25s ease}
+
+  textarea#editor{flex:1;width:100%;height:100%;resize:none;background:var(--panel-2);color:var(--text);border:0;outline:none;padding:14px;font-size:14px;line-height:1.45}
+  .statusRow{display:flex;gap:8px;align-items:center;justify-content:space-between;padding:8px 10px;border-top:1px solid var(--edge);background:rgba(255,255,255,.03);color:var(--muted)}
+
+  /* Tabs for debug */
+  .tabs{display:flex;gap:8px;padding:8px;border-bottom:1px solid var(--edge);background:rgba(255,255,255,.03)}
+  .tab{padding:6px 10px;border-radius:10px;border:1px solid var(--edge);cursor:pointer;font-weight:600;color:var(--text);background:rgba(255,255,255,.04)}
+  .tab[aria-selected="true"]{outline:0;box-shadow:0 0 0 2px rgba(106,224,255,.35) inset;border-color:rgba(106,224,255,.55)}
+  .tabpanes{flex:1;overflow:auto;background:var(--panel-2)}
+  .console,.net{min-height:140px;max-height:40vh;overflow:auto;padding:10px;font-family:ui-monospace,monospace;font-size:12px;background:var(--panel-2)}
+  .log{white-space:pre-wrap;margin:0}
+  .log.warn{color:#ffd166}
+  .log.error{color:#ff6b6b}
+
+  /* Right preview */
+  .previewPane .body{display:flex}
+  iframe#frame{flex:1;border:0;background:#0b1120}
+
+  /* Hover-to-expand: widen preview when hovered, widen left when hovered */
+  .main.focus-right{grid-template-columns:minmax(360px,0.85fr) minmax(600px,1.25fr);transition:grid-template-columns .25s ease}
+  .main.focus-left{grid-template-columns:minmax(520px,1.25fr) minmax(480px,.85fr);transition:grid-template-columns .25s ease}
+
+  /* Neon glass menu button */
+  .fab{position:fixed;right:18px;bottom:18px;z-index:40}
+  .fab .bubble{width:56px;height:56px;border-radius:18px;border:1px solid rgba(106,224,255,.6);
+    background:linear-gradient(180deg, rgba(106,224,255,.25), rgba(124,77,255,.18));
+    box-shadow:0 0 24px rgba(106,224,255,.45), inset 0 1px 0 rgba(255,255,255,.35);
+    display:grid;place-items:center;cursor:pointer}
+  .bubble svg{filter:drop-shadow(0 0 10px rgba(106,224,255,.6))}
+  .menu{position:fixed;right:18px;bottom:90px;width:320px;max-width:90vw;border:1px solid var(--edge);border-radius:16px;background:linear-gradient(180deg,rgba(17,24,48,.95),rgba(11,17,32,.92));backdrop-filter:blur(10px);box-shadow:0 10px 40px rgba(0,0,0,.5);display:none}
+  .menu.open{display:block}
+  .menu .row{display:flex;gap:8px;flex-wrap:wrap;padding:10px}
+  .menu .row .btn{flex:1}
+
+  @media (max-width: 1100px){
+    .main{grid-template-columns:1fr;grid-auto-rows:minmax(50vh,auto)}
+  }
+</style>
+</head>
+<body>
+<header>
+  <div class="bar">
+    <div class="title">Pro HTML Viewer <span class="pill">Consoles Left • Preview Right</span></div>
+    <button class="btn" id="openBtn" title="Open from disk">Open</button>
+    <input type="file" id="fileInput" accept=".html,.htm,.txt,.md" />
+    <button class="btn" id="saveBtn" title="Save raw source as .html">Save</button>
+    <button class="btn" id="exportBtn" title="Download rendered (wrapped) HTML">Export .html</button>
+    <button class="btn" id="copyBtn" title="Copy source">Copy</button>
+    <button class="btn" id="renderBtn" title="Render preview">Render</button>
+    <div class="input" title="Export filename"><span>File</span>
+      <input id="fileName" placeholder="viewer-export.html" size="22" />
+    </div>
+    <span class="pill" id="count">0 ch</span>
+    <label class="toggle" title="Enable scripts + same-origin (unsafe)"><input type="checkbox" id="scriptsChk"/> Scripts</label>
+    <label class="toggle" title="Capture console + network"><input type="checkbox" id="captureChk" checked/> Capture</label>
+    <label class="toggle" title="Auto-render on input"><input type="checkbox" id="autoChk" checked/> Auto</label>
+    <label class="toggle" title="Autosave to browser"><input type="checkbox" id="persistChk" checked/> Autosave</label>
+  </div>
+</header>
+
+<div class="main" id="main">
+  <!-- Left: Editor + Debug Tabs (hover grows) -->
+  <section class="pane leftPane" id="leftPane">
+    <div class="head">
+      <strong>Source</strong>
+      <span class="pill">Tip: <span class="kbd">Ctrl/⌘</span>+<span class="kbd">Enter</span> to render</span>
+    </div>
+    <div class="body leftStack">
+      <div class="editorWrap" id="editorWrap">
+        <textarea id="editor" spellcheck="false" placeholder="Paste or type HTML here…"></textarea>
+        <div class="statusRow">
+          <span id="status">Ready</span>
+          <span id="len">0 ch</span>
+        </div>
+      </div>
+      <div class="debugWrap" id="debugWrap">
+        <div class="tabs" role="tablist">
+          <button class="tab" id="tab-console" role="tab" aria-selected="true" data-pane="consolePane">Console</button>
+          <button class="tab" id="tab-network" role="tab" aria-selected="false" data-pane="networkPane">Network</button>
+          <button class="tab" id="tab-toolkit" role="tab" aria-selected="false" data-pane="toolkitPane">Toolkit</button>
+        </div>
+        <div class="tabpanes">
+          <div id="consolePane" role="tabpanel">
+            <div class="console" id="console"></div>
+          </div>
+          <div id="networkPane" role="tabpanel" hidden>
+            <div class="net" id="net"></div>
+          </div>
+          <div id="toolkitPane" role="tabpanel" hidden>
+            <div class="row" style="padding:10px;gap:10px;align-items:center">
+              <button class="btn" id="clearLogs">Clear Logs</button>
+              <button class="btn" id="reloadFrame">Reload Preview</button>
+              <button class="btn" id="simError">Simulate Error</button>
+              <button class="btn" id="perfStart">Perf Start</button>
+              <button class="btn" id="perfEnd">Perf End</button>
+              <button class="btn" id="dumpDom">Dump DOM Outline</button>
+              <div class="input"><span>Viewport</span>
+                <input id="vw" type="number" value="1000" min="320" step="10" style="width:90px"/> px
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Right: Preview (hover widens) -->
+  <section class="pane previewPane" id="previewPane">
+    <div class="head">
+      <strong>Preview</strong>
+      <span class="pill" id="sbState">sandbox: safe</span>
+    </div>
+    <div class="body"><iframe id="frame" title="Preview"></iframe></div>
+    <div class="statusRow"><span>Hover a pane to expand it • Use menu for quick actions</span></div>
+  </section>
+</div>
+
+<!-- Neon Glass Menu Button -->
+<div class="fab">
+  <div class="bubble" id="menuBtn" title="Quick actions">
+    <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <circle cx="12" cy="12" r="3"></circle>
+      <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06A2 2 0 1 1 7.04 3.4l.06.06a1.65 1.65 0 0 0 1.82.33h.18A1.65 1.65 0 0 0 11 2.28V2a2 2 0 1 1 4 0v.09c0 .66.39 1.26 1 1.51.58.26 1.26.15 1.73-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06c-.48.47-.59 1.15-.33 1.73.25.61.85 1 1.51 1H21a2 2 0 1 1 0 4h-.09c-.66 0-1.26.39-1.51 1z"/>
+    </svg>
+  </div>
+  <div class="menu" id="menu">
+    <div class="row">
+      <button class="btn" id="popBtn">Pop‑out</button>
+      <button class="btn" id="openBtn2">Open</button>
+      <button class="btn" id="saveBtn2">Save</button>
+      <button class="btn" id="exportBtn2">Export</button>
+      <button class="btn" id="copyBtn2">Copy</button>
+    </div>
+  </div>
+</div>
+
+<script>
+(function(){
+  const editor = document.getElementById('editor');
+  const frame = document.getElementById('frame');
+  const main = document.getElementById('main');
+  const leftPane = document.getElementById('leftPane');
+  const previewPane = document.getElementById('previewPane');
+  const status = document.getElementById('status');
+  const len = document.getElementById('len');
+  const consoleEl = document.getElementById('console');
+  const netEl = document.getElementById('net');
+  const sbState = document.getElementById('sbState');
+  const vw = document.getElementById('vw');
+
+  const openBtn = document.getElementById('openBtn');
+  const fileInput = document.getElementById('fileInput');
+  const saveBtn = document.getElementById('saveBtn');
+  const exportBtn = document.getElementById('exportBtn');
+  const copyBtn = document.getElementById('copyBtn');
+  const renderBtn = document.getElementById('renderBtn');
+  const popBtn = document.getElementById('popBtn');
+  const openBtn2 = document.getElementById('openBtn2');
+  const saveBtn2 = document.getElementById('saveBtn2');
+  const exportBtn2 = document.getElementById('exportBtn2');
+  const copyBtn2 = document.getElementById('copyBtn2');
+  const menuBtn = document.getElementById('menuBtn');
+  const menu = document.getElementById('menu');
+
+  const scriptsChk = document.getElementById('scriptsChk');
+  const captureChk = document.getElementById('captureChk');
+  const autoChk = document.getElementById('autoChk');
+  const persistChk = document.getElementById('persistChk');
+  const fileName = document.getElementById('fileName');
+
+  // Tab logic
+  const tabs = document.querySelectorAll('.tab');
+  const panes = { consolePane: document.getElementById('consolePane'), networkPane: document.getElementById('networkPane'), toolkitPane: document.getElementById('toolkitPane') };
+  tabs.forEach(t=>t.addEventListener('click',()=>{
+    tabs.forEach(b=>b.setAttribute('aria-selected','false'));
+    t.setAttribute('aria-selected','true');
+    Object.keys(panes).forEach(k=>panes[k].hidden = (t.dataset.pane!==k));
+  }));
+
+  // Hover-to-expand (column emphasis)
+  leftPane.addEventListener('mouseenter', ()=>{ main.classList.add('focus-left'); main.classList.remove('focus-right'); });
+  leftPane.addEventListener('mouseleave', ()=>{ main.classList.remove('focus-left'); });
+  previewPane.addEventListener('mouseenter', ()=>{ main.classList.add('focus-right'); main.classList.remove('focus-left'); });
+  previewPane.addEventListener('mouseleave', ()=>{ main.classList.remove('focus-right'); });
+
+  // Neon menu
+  menuBtn.addEventListener('click',()=>{ menu.classList.toggle('open'); });
+  document.addEventListener('keydown',e=>{ if(e.key==='Escape') menu.classList.remove('open'); });
+  document.addEventListener('click',e=>{ if(!menu.contains(e.target) && !menuBtn.contains(e.target)) menu.classList.remove('open'); });
+
+  // Toolkit
+  const clearLogsBtn = document.getElementById('clearLogs');
+  const reloadFrameBtn = document.getElementById('reloadFrame');
+  const simErrorBtn = document.getElementById('simError');
+  const perfStartBtn = document.getElementById('perfStart');
+  const perfEndBtn = document.getElementById('perfEnd');
+  const dumpDomBtn = document.getElementById('dumpDom');
+
+  clearLogsBtn.addEventListener('click', ()=>{ consoleEl.innerHTML=''; netEl.innerHTML=''; });
+  reloadFrameBtn.addEventListener('click', ()=>{ const u=frame.src; frame.src='about:blank'; setTimeout(()=>frame.src=u,30); });
+  simErrorBtn.addEventListener('click', ()=>{ try{ throw new Error('Simulated error from Toolkit'); }catch(e){ append(consoleEl, '[error] '+e.message, 'error'); } });
+  let perfMark = null;
+  perfStartBtn.addEventListener('click', ()=>{ perfMark = performance.now(); append(consoleEl, '[perf] start '+perfMark.toFixed(2)); });
+  perfEndBtn.addEventListener('click', ()=>{ if(perfMark!=null){ const d=performance.now()-perfMark; append(consoleEl, '[perf] '+d.toFixed(2)+' ms'); perfMark=null; } });
+  dumpDomBtn.addEventListener('click', ()=>{
+    try{
+      const doc = frame.contentDocument; if(!doc){ append(consoleEl,'[warn] preview not ready','warn'); return; }
+      const nodes = Array.from(doc.querySelectorAll('*')).slice(0,400);
+      const outline = nodes.map(n=>n.tagName.toLowerCase()+(n.id?('#'+n.id):'')+(n.className?('.'+String(n.className).trim().replace(/\s+/g,'.')):''));
+      append(consoleEl,'[dom] '+outline.join(' '));
+    }catch(err){ append(consoleEl,'[error] DOM dump failed: '+err,'error'); }
+  });
+  vw.addEventListener('input', ()=>{ const v=Math.max(320, Number(vw.value)||1000); frame.style.width=v+'px'; });
+
+  // Storage keys
+  const LS_SRC='proviewer:src';
+  const LS_FILE='proviewer:file';
+  const LS_SCRIPTS='proviewer:scripts';
+  const LS_CAPTURE='proviewer:capture';
+  const LS_AUTO='proviewer:auto';
+
+  function setSandbox(){
+    const base='allow-forms allow-modals allow-pointer-lock allow-popups allow-presentation allow-top-navigation-by-user-activation';
+    const flags = scriptsChk.checked ? base+' allow-scripts allow-same-origin' : base;
+    frame.setAttribute('sandbox', flags);
+    sbState.textContent = scriptsChk.checked ? 'sandbox: RUN (unsafe)' : 'sandbox: safe';
+  }
+
+  function prelude(){
+    return `\n<script>(function(){\n try{\n  const send=(t,p)=>parent.postMessage({type:t,payload:p},'*');\n  ['log','info','warn','error'].forEach(k=>{const o=console[k];console[k]=function(){try{send('console',{level:k,args:[...arguments].map(a=>{try{return typeof a==='string'?a:JSON.stringify(a)}catch(e){return String(a)}})})}catch(e){};o.apply(console,arguments);};});\n  window.addEventListener('error',e=>send('error',{message:e.message,stack:e.error&&e.error.stack,lineno:e.lineno,colno:e.colno,filename:e.filename}));\n  window.addEventListener('unhandledrejection',e=>send('error',{message:String(e.reason||'Unhandled rejection')}));\n  try{const ofetch=window.fetch;window.fetch=async function(){const u=arguments[0];const init=arguments[1]||{};send('net',{kind:'fetch',url:String(u),method:(init.method||'GET')});try{const res=await ofetch.apply(this,arguments);send('net',{kind:'fetch-resp',url:String(u),status:res.status});return res;}catch(err){send('net',{kind:'fetch-error',url:String(u),error:String(err)});throw err;}}}catch(_){ }\n  try{const OXHR=XMLHttpRequest;XMLHttpRequest=function(){const x=new OXHR();let url='';let method='GET';const oopen=x.open;x.open=function(m,u){method=m;url=u;return oopen.apply(this,arguments);};x.addEventListener('load',()=>send('net',{kind:'xhr',url:String(url),method:method,status:x.status}));x.addEventListener('error',()=>send('net',{kind:'xhr-error',url:String(url),method:method}));return x;};}catch(_){ }\n }catch(_){ }\n})();<\/script>`;
+  }
+
+  function wrapHTML(user){
+    const inject = captureChk.checked && scriptsChk.checked ? prelude() : '';
+    return scriptsChk.checked
+      ? `<!doctype html><html><head><meta charset='utf-8'>${inject}</head><body>${user}</body></html>`
+      : user;
+  }
+
+  function setIframeHTML(doc){
+    const blob=new Blob([doc],{type:'text/html'});
+    const url=URL.createObjectURL(blob);
+    frame.src=url;
+    frame.onload=()=>setTimeout(()=>URL.revokeObjectURL(url),1200);
+  }
+
+  function render(){
+    const html=editor.value||'';
+    setSandbox();
+    if(captureChk.checked){ consoleEl.innerHTML=''; netEl.innerHTML=''; }
+    setIframeHTML(wrapHTML(html));
+    len.textContent = html.length + ' ch';
+  }
+
+  function append(el,msg,cls){ const d=document.createElement('div'); d.className='log'+(cls?(' '+cls):''); d.textContent=msg; el.appendChild(d); el.scrollTop=el.scrollHeight; }
+  window.addEventListener('message',e=>{
+    const d=e.data||{};
+    if(d.type==='console'&&d.payload){ const {level,args}=d.payload; append(consoleEl,`[${level}] ${(args||[]).join(' ')}`,level); }
+    if(d.type==='error'&&d.payload){ const {message,stack,lineno,colno,filename}=d.payload; append(consoleEl,`[error] ${message}`+(stack?`\n${stack}`: lineno?` @${filename||''}:${lineno}:${colno||''}`:''),'error'); }
+    if(d.type==='net'&&d.payload){ const p=d.payload; append(netEl,`${p.kind} ${p.method?('['+p.method+'] '):''}${p.url||''}${p.status?(' -> '+p.status):''}`); }
+  });
+
+  // Actions
+  function exportFile(){
+    const html = wrapHTML(editor.value||'');
+    const blob=new Blob([html],{type:'text/html'});
+    const a=document.createElement('a');
+    a.href=URL.createObjectURL(blob);
+    a.download = (fileName.value && fileName.value.trim()) ? fileName.value.trim() : 'viewer-export.html';
+    document.body.appendChild(a); a.click(); setTimeout(()=>URL.revokeObjectURL(a.href),900); a.remove();
+  }
+
+  openBtn.onclick=()=>fileInput.click();
+  openBtn2.onclick=()=>fileInput.click();
+  fileInput.onchange=async e=>{const f=e.target.files?.[0]; if(!f) return; editor.value = await f.text(); render(); persist(); };
+  saveBtn.onclick=()=>{ const blob=new Blob([editor.value||''],{type:'text/html'}); const a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download='document.html'; a.click(); setTimeout(()=>URL.revokeObjectURL(a.href),900); };
+  saveBtn2.onclick=()=>saveBtn.onclick();
+  exportBtn.onclick=exportFile; exportBtn2.onclick=exportFile;
+  copyBtn.onclick=async()=>{ try{ await navigator.clipboard.writeText(editor.value||''); }catch{ alert('Copy failed'); } };
+  copyBtn2.onclick=()=>copyBtn.onclick();
+  renderBtn.onclick=render; popBtn.onclick=()=>{ const html=wrapHTML(editor.value||''); const w=window.open('', '_blank'); if(!w){ alert('Popup blocked'); return; } w.document.open(); w.document.write(html); w.document.close(); };
+
+  editor.addEventListener('input',()=>{ if(autoChk.checked) render(); persist(); });
+  editor.addEventListener('keydown',e=>{ if((e.metaKey||e.ctrlKey) && e.key.toLowerCase()==='enter'){ e.preventDefault(); render(); } if((e.metaKey||e.ctrlKey)&& e.key.toLowerCase()==='s'){ e.preventDefault(); exportFile(); } });
+
+  function persist(){ try{ if(persistChk.checked){ localStorage.setItem(LS_SRC, editor.value||''); localStorage.setItem(LS_FILE, fileName.value||''); localStorage.setItem(LS_SCRIPTS, String(!!scriptsChk.checked)); localStorage.setItem(LS_CAPTURE, String(!!captureChk.checked)); localStorage.setItem(LS_AUTO, String(!!autoChk.checked)); } else { [LS_SRC,LS_FILE,LS_SCRIPTS,LS_CAPTURE,LS_AUTO].forEach(k=>localStorage.removeItem(k)); } }catch(_){} }
+
+  // Restore
+  (function(){ try{ const s=localStorage.getItem(LS_SRC); if(s) editor.value=s; const fn=localStorage.getItem(LS_FILE); if(fn) fileName.value=fn; const sc=localStorage.getItem(LS_SCRIPTS); if(sc!=null) scriptsChk.checked=(sc==='true'); const cp=localStorage.getItem(LS_CAPTURE); if(cp!=null) captureChk.checked=(cp==='true'); const au=localStorage.getItem(LS_AUTO); if(au!=null) autoChk.checked=(au==='true'); }catch(_){} })();
+
+  // First render
+  setSandbox(); render();
+})();
+</script>
+</body>
+</html>
+</body></html>
