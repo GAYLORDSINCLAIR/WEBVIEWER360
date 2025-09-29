@@ -1,0 +1,649 @@
+<!doctype html><html><head><meta charset='utf-8'><script>(function(){
+      try{
+        const send=(t,p)=>parent.postMessage({type:t,payload:p},'*');
+
+        // Console
+        ['log','info','warn','error'].forEach(k=>{
+          const o=console[k];
+          console[k]=function(){
+            try{
+              send('console',{level:k,args:[...arguments].map(a=>{try{return typeof a==='string'?a:JSON.stringify(a)}catch(e){return String(a)}})});
+            }catch(e){}
+            o.apply(console,arguments);
+          };
+        });
+
+        // Errors
+        window.addEventListener('error',e=>send('error',{message:e.message,stack:e.error&&e.error.stack,lineno:e.lineno,colno:e.colno,filename:e.filename}));
+        window.addEventListener('unhandledrejection',e=>send('error',{message:String(e.reason||'Unhandled rejection')}));
+
+        // Network: fetch
+        try{
+          const ofetch = window.fetch;
+          window.fetch = async function(){
+            const u = arguments[0]; const init = arguments[1]||{};
+            send('net',{kind:'fetch',url:String(u),method:(init.method||'GET')});
+            try{
+              const res = await ofetch.apply(this, arguments);
+              send('net',{kind:'fetch-resp',url:String(u),status:res.status});
+              return res;
+            }catch(err){
+              send('net',{kind:'fetch-error',url:String(u),error:String(err)});
+              throw err;
+            }
+          };
+        }catch(_){}
+
+        // Network: XHR
+        try{
+          const OXHR = XMLHttpRequest;
+          XMLHttpRequest = function(){
+            const x = new OXHR(); let url=''; let method='GET';
+            const oopen = x.open;
+            x.open = function(m,u){ method=m; url=u; return oopen.apply(this,arguments); };
+            x.addEventListener('load', ()=>send('net',{kind:'xhr',url:String(url),method:method,status:x.status}));
+            x.addEventListener('error',()=>send('net',{kind:'xhr-error',url:String(url),method:method}));
+            return x;
+          };
+        }catch(_){}
+      }catch(_){}
+    })();</script></head><body><!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,viewport-fit=cover"/>
+<title>SIMON Live Builder • Chat-Driven HTML Editor</title>
+<meta name="theme-color" content="#0a0f1a"/>
+<style>
+  :root{
+    --bg:#070b16; --glass:rgba(255,255,255,.06); --edge:rgba(255,255,255,.22);
+    --txt:#eaf2ff; --muted:#a8b6d9; --acc:#6ae0ff; --acc2:#5b7dff; --ok:#44d18a; --warn:#ffcc4d; --danger:#ff6b6b;
+  }
+  *{box-sizing:border-box}
+  html,body{height:100%}
+  body{
+    margin:0; font-family: ui-sans-serif,system-ui,Inter,Segoe UI,Roboto,Arial;
+    color:var(--txt);
+    background:
+      radial-gradient(1200px 800px at 80% -10%, rgba(106,224,255,.15), transparent 60%),
+      radial-gradient(900px 600px at -10% 110%, rgba(91,125,255,.12), transparent 60%),
+      #0a0f1a;
+    overflow:hidden;
+  }
+  .topbar{
+    height:54px; display:flex; align-items:center; gap:8px; padding:8px 12px;
+    border-bottom:1px solid var(--edge); background:linear-gradient(180deg, rgba(255,255,255,.06), rgba(255,255,255,.02));
+    backdrop-filter: blur(10px);
+  }
+  .brand{display:flex; align-items:center; gap:10px; font-weight:700; letter-spacing:.4px}
+  .orb{
+    width:28px; height:28px; border-radius:50%;
+    background: radial-gradient(circle at 30% 30%, #9ff, #59f 35%, #28e 60%, #0af 80%, #06a 100%);
+    box-shadow: 0 0 18px #29d, inset 0 0 10px rgba(255,255,255,.25), 0 0 40px rgba(0,150,255,.35);
+    animation: pulse 3s ease-in-out infinite;
+  }
+  @keyframes pulse{0%,100%{transform: translateZ(0) scale(1)}50%{transform: translateZ(0) scale(1.06)}}
+
+  .btn{
+    border:1px solid var(--edge); background:var(--glass); color:var(--txt);
+    padding:8px 12px; border-radius:14px; cursor:pointer; transition:.2s;
+    box-shadow: inset 0 0 0 1px rgba(255,255,255,.04);
+  }
+  .btn:hover{transform:translateY(-1px); box-shadow:0 6px 18px rgba(0,0,0,.25), inset 0 0 0 1px rgba(255,255,255,.06)}
+  .btn.acc{border-color:rgba(106,224,255,.6); box-shadow:0 0 10px rgba(106,224,255,.25)}
+  .btn.ok{border-color:rgba(68,209,138,.6)}
+  .btn.warn{border-color:rgba(255,204,77,.6)}
+  .btn.danger{border-color:rgba(255,107,107,.6)}
+
+  .spacer{flex:1}
+
+  .layout{
+    height: calc(100% - 54px);
+    display:grid; gap:8px; padding:8px;
+    grid-template-columns: 1.1fr 1.2fr .8fr; /* editor | preview | chat */
+  }
+  .panel{
+    border:1px solid var(--edge); border-radius:18px; background:linear-gradient(180deg, rgba(255,255,255,.06), rgba(255,255,255,.02));
+    backdrop-filter: blur(8px); position:relative; overflow:hidden; display:flex; flex-direction:column; min-width: 240px;
+  }
+  .panel .head{
+    display:flex; align-items:center; gap:8px; padding:8px; border-bottom:1px solid var(--edge);
+    background: linear-gradient(180deg, rgba(255,255,255,.06), rgba(255,255,255,.01));
+  }
+  .panel .title{font-weight:600; letter-spacing:.3px}
+  .panel .tools{margin-left:auto; display:flex; gap:6px}
+  .panel .body{flex:1; position:relative; overflow:auto}
+  .hover-expand .body::after{
+    content:""; position:absolute; inset:0; border:2px solid transparent; pointer-events:none; transition:.25s;
+  }
+  .hover-expand:hover{z-index:10; transform:scale(1.01)}
+  .hover-expand:hover .body::after{border-color:rgba(106,224,255,.2); box-shadow:0 0 30px rgba(106,224,255,.15) inset}
+
+  .editor-area{height:100%; width:100%; resize:none; padding:12px 14px; border:0; outline:none; background:transparent; color:var(--txt); font: 13.5px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;}
+
+  iframe.preview{border:0; width:100%; height:100%; background:#fff}
+
+  .chat-wrap{display:flex; flex-direction:column; height:100%}
+  .chat-log{flex:1; overflow:auto; padding:12px; display:flex; flex-direction:column; gap:10px}
+  .bubble{padding:10px 12px; border-radius:12px; background:rgba(255,255,255,.06); border:1px solid var(--edge); font-size:13.5px}
+  .bubble.ai{background:rgba(106,224,255,.08); border-color:rgba(106,224,255,.35)}
+  .chat-input{display:flex; gap:8px; padding:10px; border-top:1px solid var(--edge); background:linear-gradient(180deg, rgba(255,255,255,.04), rgba(255,255,255,.01))}
+  .chat-input input,.chat-input textarea{
+    flex:1; background:rgba(255,255,255,.05); border:1px solid var(--edge); border-radius:12px; color:var(--txt); padding:10px 12px; outline:none;
+  }
+  .chat-input textarea{height:64px; resize:vertical}
+
+  .assets{display:flex; flex-wrap:wrap; gap:8px; padding:8px; border-top:1px dashed var(--edge); background:linear-gradient(180deg, rgba(255,255,255,.03), rgba(255,255,255,.0))}
+  .asset{
+    border:1px solid var(--edge); background:rgba(255,255,255,.03); border-radius:12px; padding:6px; display:flex; align-items:center; gap:8px; cursor:pointer;
+  }
+  .asset img{width:32px; height:32px; object-fit:cover; border-radius:8px}
+  .asset:hover{border-color:rgba(106,224,255,.5)}
+
+  .status{position:absolute; right:10px; bottom:10px; background:rgba(0,0,0,.35); padding:6px 8px; border:1px solid var(--edge); border-radius:10px; font-size:12px}
+
+  /* Maximize */
+  .max-editor .layout{grid-template-columns: 1fr 0 0}
+  .max-preview .layout{grid-template-columns: 0 1fr 0}
+  .max-chat .layout{grid-template-columns: 0 0 1fr}
+  .hidden{display:none !important}
+
+  /* Modal */
+  .modal{position:fixed; inset:0; background:rgba(0,0,0,.55); display:none; align-items:center; justify-content:center}
+  .modal.open{display:flex}
+  .card{
+    width:min(720px, 92vw); max-height:86vh; overflow:auto; padding:16px;
+    border:1px solid var(--edge); border-radius:18px; background:linear-gradient(180deg, rgba(255,255,255,.1), rgba(255,255,255,.04));
+  }
+  .grid{display:grid; gap:12px; grid-template-columns: 1fr 1fr}
+  .grid .col{display:flex; flex-direction:column; gap:8px}
+  label{font-size:13px; color:var(--muted)}
+  input[type="text"], input[type="password"], select{
+    background:rgba(255,255,255,.06); color:var(--txt); border:1px solid var(--edge); border-radius:10px; padding:8px 10px; outline:none;
+  }
+
+  /* Checkpoints */
+  .checkpoints{padding:8px; display:flex; gap:8px; overflow:auto; border-top:1px solid var(--edge); background:linear-gradient(180deg, rgba(255,255,255,.03), rgba(255,255,255,.0))}
+  .chip{white-space:nowrap; border:1px solid var(--edge); background:rgba(255,255,255,.04); border-radius:999px; padding:6px 10px; cursor:pointer; font-size:12px}
+  .chip:hover{border-color:rgba(106,224,255,.5)}
+  .chip.active{border-color:rgba(106,224,255,.9); background:rgba(106,224,255,.1)}
+  .danger-link{color:#ff9595; text-decoration:underline; cursor:pointer}
+
+  /* Drag & Drop */
+  .dropzone{border:2px dashed rgba(255,255,255,.25); margin:10px; padding:14px; border-radius:12px; text-align:center; font-size:13px}
+  .dropzone.drag{border-color:rgba(106,224,255,.8); background:rgba(106,224,255,.08)}
+  @media (max-width: 1100px){ .layout{grid-template-columns:1fr; grid-auto-rows:minmax(240px, 1fr)} }
+</style>
+</head>
+<body>
+  <div class="topbar">
+    <div class="brand"><div class="orb"></div> SIMON Live Builder</div>
+    <button class="btn acc" id="runBtn" title="Render the current HTML to the preview">Run ▷</button>
+    <button class="btn" id="openBtn">Open File…</button>
+    <button class="btn" id="saveBtn">Save As…</button>
+    <button class="btn" id="settingsBtn">Settings</button>
+    <div class="spacer"></div>
+    <button class="btn" id="maxEditor">Max Editor</button>
+    <button class="btn" id="maxPreview">Max Preview</button>
+    <button class="btn" id="maxChat">Max Chat</button>
+    <button class="btn warn" id="resetMax">Reset View</button>
+  </div>
+
+  <div class="layout" id="layout">
+    <!-- Editor Panel -->
+    <div class="panel hover-expand" id="editorPanel">
+      <div class="head">
+        <div class="title">HTML / CSS / JS</div>
+        <div class="tools">
+          <button class="btn" id="checkpointBtn">Save Checkpoint</button>
+          <button class="btn ok" id="insertSelectedAssetBtn" title="Insert the selected asset at cursor">Insert Asset</button>
+        </div>
+      </div>
+      <div class="body">
+        <textarea id="editor" class="editor-area" spellcheck="false"></textarea>
+        <div class="checkpoints" id="checkpoints"></div>
+        <div class="status" id="status">Ready</div>
+      </div>
+    </div>
+
+    <!-- Preview Panel -->
+    <div class="panel hover-expand" id="previewPanel">
+      <div class="head">
+        <div class="title">Live Preview</div>
+        <div class="tools">
+          <button class="btn" id="reloadBtn">Reload</button>
+          <button class="btn" id="clearStorageBtn" title="Clear local cache in this app">Clear Cache</button>
+        </div>
+      </div>
+      <div class="body">
+        <iframe class="preview" id="preview"></iframe>
+      </div>
+    </div>
+
+    <!-- Chat + Assets Panel -->
+    <div class="panel hover-expand" id="chatPanel">
+      <div class="head">
+        <div class="title">Chat to Edit</div>
+        <div class="tools">
+          <button class="btn" id="useHtmlInPrompt">Attach Current HTML</button>
+          <button class="btn" id="applyAiBtn" title="Replace editor with the last AI suggestion">Apply AI</button>
+        </div>
+      </div>
+      <div class="body chat-wrap">
+        <div class="chat-log" id="chatLog"></div>
+        <div class="chat-input">
+          <textarea id="prompt" placeholder="e.g., “Make the hero full-screen with a neon gradient and insert the image named header.jpg as the background.”"></textarea>
+          <button class="btn acc" id="sendBtn">Ask</button>
+        </div>
+        <div class="dropzone" id="dropzone">Drop files here (images, .txt, .md, .json) or use <input type="file" id="fileInput" multiple></div>
+        <div class="assets" id="assets"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Settings Modal -->
+  <div class="modal" id="settingsModal" role="dialog" aria-modal="true" aria-label="Settings">
+    <div class="card">
+      <h2 style="margin:6px 4px 14px 4px">Settings</h2>
+      <div class="grid">
+        <div class="col">
+          <label>OpenAI API Key</label>
+          <input type="password" id="apiKey" placeholder="sk-..."/>
+        </div>
+        <div class="col">
+          <label>Model (e.g., gpt-4o-mini, gpt-4.1, gpt-4.1-mini)</label>
+          <input type="text" id="model" value="gpt-4o-mini"/>
+        </div>
+        <div class="col">
+          <label>Optional Proxy Base URL (advanced)</label>
+          <input type="text" id="proxy" placeholder="https://your-proxy.example.com/openai"/>
+        </div>
+        <div class="col">
+          <label>System Style</label>
+          <select id="style">
+            <option value="clean">Clean (default)</option>
+            <option value="verbose">Verbose Assistant</option>
+            <option value="minimal">Minimal edits only</option>
+          </select>
+        </div>
+      </div>
+      <div style="display:flex; gap:8px; margin-top:16px">
+        <button class="btn ok" id="saveSettings">Save</button>
+        <button class="btn" id="closeSettings">Close</button>
+        <div class="spacer"></div>
+        <span class="danger-link" id="wipeAll">Wipe Local Settings</span>
+      </div>
+    </div>
+  </div>
+
+<script>
+(() => {
+  const $ = s => document.querySelector(s);
+  const $$ = s => document.querySelectorAll(s);
+
+  const editor = $('#editor');
+  const preview = $('#preview');
+  const runBtn = $('#runBtn');
+  const reloadBtn = $('#reloadBtn');
+  const openBtn = $('#openBtn');
+  const saveBtn = $('#saveBtn');
+  const settingsBtn = $('#settingsBtn');
+  const settingsModal = $('#settingsModal');
+  const saveSettings = $('#saveSettings');
+  const closeSettings = $('#closeSettings');
+  const apiKeyEl = $('#apiKey');
+  const modelEl = $('#model');
+  const proxyEl = $('#proxy');
+  const styleEl = $('#style');
+  const status = $('#status');
+  const chatLog = $('#chatLog');
+  const promptEl = $('#prompt');
+  const sendBtn = $('#sendBtn');
+  const checkpointsEl = $('#checkpoints');
+  const checkpointBtn = $('#checkpointBtn');
+  const assetsEl = $('#assets');
+  const dropzone = $('#dropzone');
+  const fileInput = $('#fileInput');
+  const insertAssetBtn = $('#insertSelectedAssetBtn');
+  const clearStorageBtn = $('#clearStorageBtn');
+  const useHtmlInPromptBtn = $('#useHtmlInPrompt');
+  const applyAiBtn = $('#applyAiBtn');
+  const wipeAll = $('#wipeAll');
+
+  const layout = $('#layout');
+  $('#maxEditor').onclick = ()=>{ document.body.classList.remove('max-preview','max-chat'); document.body.classList.add('max-editor') }
+  $('#maxPreview').onclick = ()=>{ document.body.classList.remove('max-editor','max-chat'); document.body.classList.add('max-preview') }
+  $('#maxChat').onclick = ()=>{ document.body.classList.remove('max-editor','max-preview'); document.body.classList.add('max-chat') }
+  $('#resetMax').onclick = ()=>{ document.body.classList.remove('max-editor','max-preview','max-chat') }
+
+  // State
+  let assets = []; // {name, type, url, text?}
+  let checkpoints = [];
+  let lastAiSuggestion = '';
+  let selectedAssetName = null;
+
+  // Defaults
+  const defaultHTML = `<!doctype html>
+<html>
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>New Page</title>
+<style>
+  :root{--bg:#0b0f1c;--txt:#eaf2ff;--glass:rgba(255,255,255,.06);--edge:rgba(255,255,255,.22);--acc:#6ae0ff}
+  html,body{height:100%}body{margin:0;background:radial-gradient(80% 60% at 20% 10%, rgba(106,224,255,.16), transparent 60%), #0b0f1c; color:var(--txt); font-family: system-ui, Inter, Segoe UI, Roboto}
+  .hero{min-height:100vh; display:grid; place-items:center; text-align:center; padding:20px}
+  .card{background:var(--glass); border:1px solid var(--edge); border-radius:18px; padding:28px; max-width:720px}
+  .title{font-size:40px; margin:0 0 10px}
+  .subtitle{color:#a9b6d9; margin:0 0 20px}
+  .btn{display:inline-block; padding:10px 16px; border-radius:12px; border:1px solid rgba(106,224,255,.5); color:var(--txt); text-decoration:none}
+</style>
+</head>
+<body>
+  <section class="hero">
+    <div class="card">
+      <h1 class="title">Hello, SIMON Builder 👋</h1>
+      <p class="subtitle">Edit this HTML or ask Chat to transform it.</p>
+      <a href="#" class="btn">Neon Button</a>
+    </div>
+  </section>
+</body>
+</html>`;
+
+  // Load settings
+  function loadSettings(){
+    const cfg = JSON.parse(localStorage.getItem('simon_builder_cfg')||'{}');
+    apiKeyEl.value = cfg.apiKey||'';
+    modelEl.value = cfg.model||'gpt-4o-mini';
+    proxyEl.value = cfg.proxy||'';
+    styleEl.value = cfg.style||'clean';
+  }
+  function saveSettingsToStorage(){
+    const cfg = {apiKey:apiKeyEl.value.trim(), model:modelEl.value.trim(), proxy:proxyEl.value.trim(), style:styleEl.value};
+    localStorage.setItem('simon_builder_cfg', JSON.stringify(cfg));
+  }
+
+  // Editor init
+  editor.value = localStorage.getItem('simon_builder_current') || defaultHTML;
+  render();
+
+  function render(){
+    preview.srcdoc = editor.value;
+    status.textContent = 'Rendered';
+    localStorage.setItem('simon_builder_current', editor.value);
+  }
+
+  runBtn.onclick = render;
+  reloadBtn.onclick = render;
+
+  // Open File
+  openBtn.onclick = async () => {
+    const picker = document.createElement('input');
+    picker.type='file'; picker.accept='.html,.htm,text/html';
+    picker.onchange = async () => {
+      const file = picker.files[0]; if(!file) return;
+      const text = await file.text();
+      editor.value = text; render();
+      log(`Opened: ${file.name}`);
+    };
+    picker.click();
+  };
+
+  // Save As…
+  saveBtn.onclick = async () => {
+    const blob = new Blob([editor.value], {type:'text/html'});
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    const name = prompt('Save filename as:', 'index.html') || 'index.html';
+    a.href = url; a.download = name; a.click();
+    setTimeout(()=> URL.revokeObjectURL(url), 1000);
+  };
+
+  // Settings
+  settingsBtn.onclick = ()=>{ loadSettings(); settingsModal.classList.add('open') };
+  closeSettings.onclick = ()=> settingsModal.classList.remove('open');
+  saveSettings.onclick = ()=>{ saveSettingsToStorage(); settingsModal.classList.remove('open'); log('Settings saved.') };
+  wipeAll.onclick = ()=>{ localStorage.clear(); location.reload() };
+
+  // Checkpoints
+  function addCheckpoint(label='snapshot'){
+    const item = {ts:Date.now(), html: editor.value, label};
+    checkpoints.push(item);
+    drawCheckpoints();
+    persistCheckpoints();
+  }
+  function drawCheckpoints(){
+    checkpointsEl.innerHTML = '';
+    checkpoints.forEach((cp, i)=>{
+      const chip = document.createElement('div');
+      chip.className='chip';
+      const dt = new Date(cp.ts).toLocaleTimeString();
+      chip.textContent = `${cp.label} • ${dt}`;
+      chip.title = 'Click to restore this version';
+      chip.onclick = ()=>{
+        if(confirm('Restore this checkpoint? Your current changes will be replaced.')){
+          editor.value = cp.html; render();
+        }
+      };
+      checkpointsEl.appendChild(chip);
+    });
+  }
+  function persistCheckpoints(){
+    localStorage.setItem('simon_builder_cps', JSON.stringify(checkpoints));
+  }
+  (function loadCheckpoints(){
+    checkpoints = JSON.parse(localStorage.getItem('simon_builder_cps')||'[]');
+    drawCheckpoints();
+  })();
+  checkpointBtn.onclick = ()=> addCheckpoint('manual');
+
+  // Chat
+  function log(msg, who='sys'){
+    const b = document.createElement('div');
+    b.className='bubble' + (who==='ai'?' ai':'');
+    b.textContent = msg;
+    chatLog.appendChild(b);
+    chatLog.scrollTop = chatLog.scrollHeight;
+  }
+
+  function currentConfig(){
+    const cfg = JSON.parse(localStorage.getItem('simon_builder_cfg')||'{}');
+    return cfg;
+  }
+
+  // Build the system prompt to keep the model disciplined
+  function systemPrompt(style){
+    const base = `You are SIMON, a code editor that ONLY outputs complete, valid HTML files when asked to modify a website.
+- If user asks for edits, take the CURRENT_HTML and return a full updated file (<!doctype html>…).
+- Respect user assets. If they reference "assets/NAME", keep that exact path.
+- Keep scripts inline unless told otherwise.
+- Do not include commentary, only code when editing.
+- Prefer clean, modern, responsive CSS. Avoid external CDNs unless requested.`;
+
+    if(style==='verbose') return base + ` Also explain your changes briefly before the code.`;
+    if(style==='minimal') return base + ` Output only code. No explanations.`;
+    return base;
+  }
+
+  // Optional asset src mapping: replace src="assets/X" with blob URLs if we have them
+  function mapAssetsInHTML(html){
+    assets.forEach(a=>{
+      const re1 = new RegExp(`src=["']assets/${escapeRegex(a.name)}["']`, 'g');
+      const re2 = new RegExp(`href=["']assets/${escapeRegex(a.name)}["']`, 'g');
+      html = html.replace(re1, `src="${a.url}"`).replace(re2, `href="${a.url}"`);
+    });
+    return html;
+  }
+  function escapeRegex(s){return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}
+
+  useHtmlInPromptBtn.onclick = ()=>{
+    const snippet = `\n\n[ATTACH_HTML_START]\n${editor.value}\n[ATTACH_HTML_END]\n`;
+    promptEl.value += snippet;
+    promptEl.focus();
+  };
+
+  applyAiBtn.onclick = ()=>{
+    if(!lastAiSuggestion){ alert('No AI suggestion yet.'); return; }
+    editor.value = lastAiSuggestion;
+    render();
+    addCheckpoint('AI');
+  };
+
+  sendBtn.onclick = async ()=>{
+    const p = promptEl.value.trim();
+    if(!p) return;
+    const cfg = currentConfig();
+    if(!(cfg.apiKey || cfg.proxy)){ alert('Add your OpenAI API key (or proxy) in Settings.'); return; }
+
+    log('You: ' + p);
+    status.textContent = 'Thinking…';
+    sendBtn.disabled = true;
+
+    // Build messages
+    const messages = [];
+    messages.push({role:'system', content: systemPrompt(cfg.style||'clean')});
+    const attachIdx = p.indexOf('[ATTACH_HTML_START]');
+    if(attachIdx!==-1){
+      // Split and attach current HTML as a separate “document” message
+      const htmlBetween = p.split('[ATTACH_HTML_START]')[1]?.split('[ATTACH_HTML_END]')[0] || editor.value;
+      messages.push({role:'user', content: p.replace(/\[ATTACH_HTML_START\][\s\S]*?\[ATTACH_HTML_END\]/, '[HTML attached below]')});
+      messages.push({role:'user', content: "CURRENT_HTML:\n\n"+ htmlBetween});
+    }else{
+      messages.push({role:'user', content: p});
+      messages.push({role:'user', content: "CURRENT_HTML:\n\n"+ editor.value});
+    }
+
+    // Also attach an index of assets
+    if(assets.length){
+      const list = assets.map(a=>`- ${a.name} (${a.type}) -> use path "assets/${a.name}"`).join('\n');
+      messages.push({role:'user', content: "AVAILABLE_ASSETS:\n" + list + "\nWhen inserting, reference them as assets/NAME. I will map to blob URLs."});
+    }
+
+    try{
+      const body = {
+        model: cfg.model || 'gpt-4o-mini',
+        messages,
+        temperature: 0.2
+      };
+
+      // Allow proxy (POST to proxy) or direct OpenAI
+      let url = 'https://api.openai.com/v1/chat/completions';
+      const headers = {'Content-Type':'application/json'};
+      if(cfg.proxy){
+        url = cfg.proxy.replace(/\/+$/,'') + '/v1/chat/completions';
+        if(cfg.apiKey) headers['Authorization'] = 'Bearer ' + cfg.apiKey; // some proxies still require
+      }else{
+        headers['Authorization'] = 'Bearer ' + (cfg.apiKey||'');
+      }
+
+      const res = await fetch(url, {method:'POST', headers, body: JSON.stringify(body)});
+      if(!res.ok){
+        const t = await res.text();
+        throw new Error(`API error ${res.status}: ${t}`);
+      }
+      const data = await res.json();
+      let out = data.choices?.[0]?.message?.content || '';
+      log('AI responded.', 'ai');
+
+      // If the model included explanations + code, try to extract the code fence
+      const fence = out.match(/```html([\s\S]*?)```/i) || out.match(/```([\s\S]*?)```/);
+      let html = fence ? fence[1].trim() : out.trim();
+
+      // Fallback: if it didn’t look like full HTML, wrap it
+      if(!/<!doctype html>/i.test(html)){
+        html = `<!doctype html>\n<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Updated</title></head><body>\n${html}\n</body></html>`;
+      }
+
+      html = mapAssetsInHTML(html);
+      lastAiSuggestion = html;
+
+      // Show a small diff note
+      const chars = html.length;
+      log(`(Prepared updated HTML • ${chars.toLocaleString()} chars). Click “Apply AI” to load it.`, 'ai');
+
+      status.textContent = 'AI suggestion ready';
+    }catch(err){
+      console.error(err);
+      log('Error: ' + err.message);
+      status.textContent = 'Error';
+    }finally{
+      sendBtn.disabled = false;
+    }
+  };
+
+  // Drag & drop / file input
+  ;['dragenter','dragover'].forEach(evt=>{
+    dropzone.addEventListener(evt, e=>{e.preventDefault(); e.stopPropagation(); dropzone.classList.add('drag')});
+  });
+  ;['dragleave','drop'].forEach(evt=>{
+    dropzone.addEventListener(evt, e=>{e.preventDefault(); e.stopPropagation(); dropzone.classList.remove('drag')});
+  });
+  dropzone.addEventListener('drop', async e=>{
+    const files = [...e.dataTransfer.files];
+    await handleFiles(files);
+  });
+  fileInput.addEventListener('change', async e=>{
+    const files = [...fileInput.files];
+    await handleFiles(files);
+    fileInput.value='';
+  });
+
+  async function handleFiles(files){
+    for(const f of files){
+      const url = URL.createObjectURL(f);
+      const item = {name:f.name, type:f.type, url};
+      // If text-like, read contents
+      if(f.type.startsWith('text/') || /\.(md|json|txt)$/i.test(f.name)){
+        item.text = await f.text();
+      }
+      assets.push(item);
+      addAssetChip(item);
+      log(`Loaded asset: ${f.name}`);
+    }
+  }
+
+  function addAssetChip(a){
+    const chip = document.createElement('div'); chip.className='asset'; chip.dataset.name=a.name;
+    const img = document.createElement('img');
+    if(a.type.startsWith('image/')) img.src=a.url; else img.src='data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64"><rect width="100%" height="100%" fill="%230aa"/><text x="50%" y="54%" dominant-baseline="middle" text-anchor="middle" fill="white" font-size="14">FILE</text></svg>';
+    const label = document.createElement('span'); label.textContent=a.name;
+    chip.appendChild(img); chip.appendChild(label);
+    chip.onclick = ()=>{
+      selectedAssetName = a.name;
+      $$('.asset').forEach(n=> n.style.outline='none');
+      chip.style.outline='2px solid rgba(106,224,255,.7)';
+    };
+    assetsEl.appendChild(chip);
+  }
+
+  insertAssetBtn.onclick = ()=>{
+    if(!selectedAssetName){ alert('Select an asset first'); return; }
+    const cursor = editor.selectionStart||0;
+    const tag = guessTag(selectedAssetName);
+    editor.setRangeText(tag, cursor, cursor, 'end');
+    editor.focus();
+  };
+  function guessTag(name){
+    if(/\.(png|jpg|jpeg|gif|webp|svg)$/i.test(name)){
+      return `<img src="assets/${name}" alt="${name}">\n`;
+    }
+    if(/\.(md|txt|json)$/i.test(name)){
+      return `<!-- asset: assets/${name} -->\n`;
+    }
+    return `<a href="assets/${name}" download>${name}</a>\n`;
+  }
+
+  clearStorageBtn.onclick = ()=>{
+    if(confirm('Clear this app’s local cache (current HTML, checkpoints, settings)?')){
+      localStorage.clear(); location.reload();
+    }
+  };
+
+  // Helpers
+  function debounce(fn, ms=400){let t; return (...args)=>{clearTimeout(t); t=setTimeout(()=>fn(...args),ms)}}
+  editor.addEventListener('input', debounce(()=> localStorage.setItem('simon_builder_current', editor.value), 200));
+
+})();
+</script>
+</body>
+</html></body></html>
