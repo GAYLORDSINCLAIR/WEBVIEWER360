@@ -1,0 +1,514 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover" />
+<title>SIMON • Web Viewer Pro (Multi‑Session + OpenAI + FTP)</title>
+<meta name="theme-color" content="#070b16" />
+<style>
+  :root{
+    --bg:#070b16; --panel:#0e1423; --glass:rgba(255,255,255,.08);
+    --edge:rgba(255,255,255,.18); --text:#eaf2ff; --muted:#9fb0d8;
+    --acc:#6ae0ff; --acc2:#5b7dff; --ok:#44d18a; --warn:#ffcc4d; --danger:#ff6b6b;
+  }
+  *{box-sizing:border-box}
+  html,body{height:100%}
+  body{margin:0;font-family:ui-sans-serif,system-ui,-apple-system,Inter,Segoe UI,Roboto;background:
+    radial-gradient(80% 60% at 20% 20%, rgba(90,120,255,.08), transparent 60%),
+    radial-gradient(60% 50% at 80% 30%, rgba(90,255,220,.06), transparent 60%),
+    linear-gradient(#070b16, #090f1e);
+    color:var(--text);
+  }
+
+  .app{display:grid; grid-template-columns: 280px 1fr 45%; grid-template-rows:auto 1fr auto; height:100%}
+  header{grid-column:1 / -1; display:flex; align-items:center; gap:.75rem; padding:.6rem .8rem; border-bottom:1px solid var(--edge); background:linear-gradient(to bottom, rgba(255,255,255,.06), rgba(255,255,255,0)); position:sticky; top:0; z-index:10}
+  header .logo{font-weight:700; letter-spacing:.06em}
+  header .pill{padding:.3rem .6rem; border:1px solid var(--edge); border-radius:999px; background:var(--glass); color:var(--muted); font-size:.85rem}
+  header .spacer{flex:1}
+  header button{background:var(--glass); border:1px solid var(--edge); color:var(--text); padding:.55rem .8rem; border-radius:.7rem; cursor:pointer}
+  header button:hover{border-color:var(--acc)}
+
+  /* Left: Sessions */
+  .sessions{border-right:1px solid var(--edge); background:linear-gradient(to bottom, rgba(255,255,255,.03), rgba(255,255,255,0)); padding:.6rem; overflow:auto}
+  .sessions h3{margin:.4rem 0 .6rem; color:var(--muted); font-size:.9rem; letter-spacing:.05em}
+  .session-list{display:flex; flex-direction:column; gap:.45rem}
+  .session{display:flex; align-items:center; gap:.5rem; padding:.5rem; border:1px solid var(--edge); border-radius:.6rem; background:var(--glass); cursor:pointer}
+  .session.active{outline:2px solid var(--acc); box-shadow:0 0 0 3px rgba(106,224,255,.2) inset}
+  .session .name{flex:1; white-space:nowrap; overflow:hidden; text-overflow:ellipsis}
+  .session small{color:var(--muted)}
+  .session .x{opacity:.7}
+  .session:hover .x{opacity:1}
+
+  .new-session{display:flex; gap:.5rem; margin-top:.5rem}
+  .new-session input{flex:1; padding:.5rem .6rem; border-radius:.6rem; border:1px solid var(--edge); background:rgba(255,255,255,.04); color:var(--text)}
+  .new-session button{border-radius:.6rem}
+
+  /* Center: Editor & tools */
+  .center{display:grid; grid-template-rows:auto 1fr auto; min-width:0}
+  .toolbar{display:flex; gap:.5rem; padding:.6rem; border-bottom:1px solid var(--edge); background:rgba(255,255,255,.03)}
+  .toolbar button, .toolbar select, .toolbar label{background:var(--glass); border:1px solid var(--edge); color:var(--text); padding:.5rem .6rem; border-radius:.6rem; cursor:pointer}
+  .toolbar select{cursor:pointer}
+  .toolbar input[type=file]{display:none}
+  .editor{position:relative}
+  textarea#code{width:100%; height:100%; border:0; outline:0; padding:1rem 1.1rem 2.6rem; resize:none; font:13.5px/1.4 ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace; color:#e9f1ff; background:transparent}
+  .statusbar{display:flex; gap:.8rem; align-items:center; padding:.5rem .7rem; border-top:1px solid var(--edge); color:var(--muted)}
+  .statusbar .dot{width:8px;height:8px;border-radius:50%}
+  .ok{background:var(--ok)} .warn{background:var(--warn)} .danger{background:var(--danger)}
+
+  /* Right: Preview + Chat */
+  .right{display:grid; grid-template-rows: 45% 55%; border-left:1px solid var(--edge); min-width:300px}
+  .preview{border-bottom:1px solid var(--edge); background:rgba(255,255,255,.03)}
+  .preview iframe{width:100%; height:100%; border:0; background:white; border-radius:0 0 0 0}
+  .chat{display:grid; grid-template-rows: 1fr auto; min-height:0}
+  .chatlog{overflow:auto; padding:.8rem; display:flex; flex-direction:column; gap:.7rem}
+  .msg{border:1px solid var(--edge); background:var(--glass); padding:.6rem .7rem; border-radius:.6rem}
+  .msg.me{border-color:rgba(106,224,255,.3)}
+  .composer{display:flex; gap:.5rem; padding:.6rem; border-top:1px solid var(--edge)}
+  .composer textarea{flex:1; min-height:46px; max-height:180px; padding:.6rem .7rem; border-radius:.6rem; border:1px solid var(--edge); background:rgba(255,255,255,.04); color:var(--text)}
+  .composer button, .composer select{border-radius:.6rem; background:var(--glass); border:1px solid var(--edge); color:var(--text); padding:.55rem .7rem}
+
+  /* Modal */
+  .modal{position:fixed; inset:0; display:none; align-items:center; justify-content:center; background:rgba(3,6,14,.55); z-index:20}
+  .modal.show{display:flex}
+  .sheet{width:min(760px, 92vw); max-height:86vh; overflow:auto; padding:1rem; border:1px solid var(--edge); border-radius:1rem; background:linear-gradient(180deg, rgba(255,255,255,.07), rgba(255,255,255,.03)); box-shadow:0 20px 100px rgba(0,0,0,.45)}
+  .sheet h2{margin:.2rem 0 .8rem}
+  .grid{display:grid; gap:.7rem}
+  .grid.two{grid-template-columns: 1fr 1fr}
+  .grid.three{grid-template-columns: repeat(3, 1fr)}
+  .sheet label{font-size:.85rem; color:var(--muted)}
+  .sheet input, .sheet select{width:100%; padding:.55rem .7rem; border-radius:.6rem; border:1px solid var(--edge); background:rgba(255,255,255,.05); color:var(--text)}
+  .sheet .row{display:flex; gap:.5rem; align-items:center}
+  .sheet .row button{border-radius:.6rem; background:var(--glass); border:1px solid var(--edge); color:var(--text); padding:.55rem .7rem}
+
+  @media (max-width: 1100px){
+    .app{grid-template-columns: 240px 1fr; grid-template-rows:auto 40vh 1fr auto}
+    .right{grid-column:1 / -1; grid-row:3}
+    .center{grid-row:2}
+  }
+</style>
+</head>
+<body>
+<div class="app">
+  <header>
+    <div class="logo">🧿 <span style="letter-spacing:.08em">SIMON</span> Web Viewer Pro</div>
+    <span class="pill">Multi‑Session</span>
+    <span class="pill">OpenAI Assist</span>
+    <span class="pill">FTP Deploy</span>
+    <div class="spacer"></div>
+    <button id="btnSettings">Settings</button>
+    <button id="btnSave">Save</button>
+    <button id="btnRun">Run ▶</button>
+  </header>
+
+  <!-- Left: Sessions -->
+  <aside class="sessions">
+    <h3>Sessions</h3>
+    <div id="sessionList" class="session-list"></div>
+    <div class="new-session">
+      <input id="newSessionName" placeholder="New session name…" />
+      <button id="addSession">Add</button>
+    </div>
+  </aside>
+
+  <!-- Center: Editor -->
+  <main class="center">
+    <div class="toolbar">
+      <label for="fileInput">📄 Import</label>
+      <input id="fileInput" type="file" accept=".html,.htm,.css,.js,.txt,.md" />
+      <button id="downloadBtn">Download</button>
+      <button id="duplicateBtn">Duplicate Session</button>
+      <button id="deleteBtn">Delete Session</button>
+      <div style="flex:1"></div>
+      <select id="aiMode">
+        <option value="fix">Fix bugs</option>
+        <option value="optimize">Optimize/condense</option>
+        <option value="explain">Explain code</option>
+        <option value="feature">Add requested feature</option>
+      </select>
+      <button id="askAI">Ask OpenAI</button>
+    </div>
+    <div class="editor">
+      <textarea id="code" spellcheck="false" placeholder="Paste or type your HTML/CSS/JS here…"></textarea>
+    </div>
+    <div class="statusbar">
+      <div id="apiDot" class="dot danger" title="OpenAI API key not set"></div><span id="apiStatus">OpenAI: not configured</span>
+      <div id="ftpDot" class="dot warn" title="FTP relay not confirmed"></div><span id="ftpStatus">FTP: configure in Settings</span>
+      <div style="flex:1"></div>
+      <span id="info">Ready.</span>
+    </div>
+  </main>
+
+  <!-- Right: Preview + Chat -->
+  <section class="right">
+    <div class="preview">
+      <iframe id="preview"></iframe>
+    </div>
+    <div class="chat">
+      <div id="chatlog" class="chatlog"></div>
+      <div class="composer">
+        <textarea id="userMsg" placeholder="Ask for help or describe the change you want…"></textarea>
+        <select id="apiEndpoint" title="API">
+          <option value="chat">Chat Completions</option>
+          <option value="responses">Responses API</option>
+        </select>
+        <button id="sendMsg">Send</button>
+        <button id="deployBtn" title="Upload current session to your host via FTP relay">Deploy ⬆</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- Footer -->
+  <footer style="grid-column:1 / -1; padding:.5rem .8rem; border-top:1px solid var(--edge); color:var(--muted); font-size:.85rem">
+    Tip: Sessions, API key, and FTP settings are stored locally on this device. Use the relay server below for secure FTP.
+  </footer>
+</div>
+
+<!-- Settings Modal -->
+<div id="modal" class="modal" aria-hidden="true">
+  <div class="sheet">
+    <h2>Settings</h2>
+    <div class="grid two">
+      <div>
+        <h3>OpenAI</h3>
+        <label>API Key</label>
+        <input id="openaiKey" type="password" placeholder="sk-..." />
+        <label>Default Model</label>
+        <input id="openaiModel" placeholder="gpt-4o-mini" />
+      </div>
+      <div>
+        <h3>FTP Relay (Node server)</h3>
+        <label>Relay URL (e.g., http://localhost:8787)</label>
+        <input id="relayUrl" placeholder="http://localhost:8787" />
+        <label>Remote directory (e.g., /public_html)</label>
+        <input id="remoteDir" placeholder="/public_html" />
+      </div>
+    </div>
+    <div class="grid three" style="margin-top:1rem">
+      <div>
+        <h3>FTP Credentials</h3>
+        <label>Host</label><input id="ftpHost" placeholder="ftp.example.com" />
+        <label>Username</label><input id="ftpUser" placeholder="user@example.com" />
+        <label>Password</label><input id="ftpPass" type="password" placeholder="••••••••" />
+      </div>
+      <div>
+        <h3>&nbsp;</h3>
+        <label>Port</label><input id="ftpPort" type="number" placeholder="21" />
+        <label>Secure (FTPS)</label><select id="ftpSecure"><option value="explicit">explicit</option><option value="false">false</option></select>
+        <label>Remote Filename</label><input id="remoteName" placeholder="index.html" />
+      </div>
+      <div>
+        <h3>Session Export/Import</h3>
+        <div class="row">
+          <button id="exportSessions">Export JSON</button>
+          <button id="importSessions">Import JSON</button>
+          <input id="importFile" type="file" accept="application/json" style="display:none" />
+        </div>
+        <div class="row">
+          <button id="clearAll" style="border-color:var(--danger); color:#ffd5d5">Clear ALL (danger)</button>
+        </div>
+      </div>
+    </div>
+    <div class="row" style="margin-top:1rem; justify-content:flex-end">
+      <button id="closeSettings">Close</button>
+      <button id="saveSettings">Save</button>
+    </div>
+  </div>
+</div>
+
+<script>
+/* ---------------------- State & Utilities ---------------------- */
+const $ = sel => document.querySelector(sel);
+const el = (tag, cls, txt) => { const e=document.createElement(tag); if(cls) e.className=cls; if(txt) e.textContent=txt; return e; };
+
+const store = {
+  get k(){ return JSON.parse(localStorage.getItem('simon-webviewer-k')||'{}') },
+  set k(v){ localStorage.setItem('simon-webviewer-k', JSON.stringify(v)) },
+  get sessions(){ return JSON.parse(localStorage.getItem('simon-webviewer-sessions')||'[]') },
+  set sessions(v){ localStorage.setItem('simon-webviewer-sessions', JSON.stringify(v)) },
+  get current(){ return localStorage.getItem('simon-webviewer-current') },
+  set current(v){ localStorage.setItem('simon-webviewer-current', v) },
+};
+
+function uid(){ return Math.random().toString(36).slice(2,9) }
+
+function setInfo(msg){ $('#info').textContent = msg; }
+
+/* ---------------------- Sessions ---------------------- */
+function ensureDefault(){
+  if(store.sessions.length===0){
+    const id = uid();
+    const sample = "<!doctype html>\\n<html><head><meta charset='utf-8'><meta name='viewport' content='width=device-width, initial-scale=1'><title>New Session</title></head><body style='font-family:system-ui;padding:2rem'><h1>Hello, SIMON!</h1><p>Edit this and press Run ▶ to preview.</p></body></html>";
+    store.sessions = [{id, name:'Session 1', code: sample, updated: Date.now()}];
+    store.current = id;
+  }
+}
+
+function renderSessions(){
+  const list = $('#sessionList'); list.innerHTML='';
+  store.sessions.forEach(s => {
+    const item = el('div','session'+(s.id===store.current?' active':''));
+    const name = el('div','name', s.name);
+    const small = el('small',null, new Date(s.updated).toLocaleString());
+    const close = el('button','x','✕'); close.title='Delete';
+    close.addEventListener('click', (ev)=>{ ev.stopPropagation(); deleteSession(s.id); });
+    item.append(name, small, close);
+    item.addEventListener('click', ()=>{ store.current=s.id; refreshActive(); });
+    list.append(item);
+  });
+}
+
+function getCurrent(){ return store.sessions.find(s=>s.id===store.current) }
+
+function refreshActive(){
+  renderSessions();
+  const cur = getCurrent();
+  if(cur){ $('#code').value = cur.code; run(); }
+}
+
+function saveCurrent(code){
+  const list = store.sessions.map(s => s.id===store.current ? {...s, code, updated: Date.now()} : s);
+  store.sessions = list;
+  setInfo('Saved.');
+}
+
+function addSession(name){
+  const id = uid();
+  store.sessions = [...store.sessions, {id, name: name||`Session ${store.sessions.length+1}`, code:'', updated: Date.now()}];
+  store.current = id; refreshActive();
+}
+
+function deleteSession(id){
+  const list = store.sessions.filter(s => s.id!==id);
+  store.sessions = list;
+  if(!store.current || !list.find(s=>s.id===store.current)){
+    store.current = list[0]?.id || null;
+  }
+  refreshActive();
+}
+
+function duplicateCurrent(){
+  const cur = getCurrent(); if(!cur) return;
+  addSession(cur.name + ' (copy)'); $('#code').value = cur.code; saveCurrent(cur.code);
+}
+
+/* ---------------------- Preview ---------------------- */
+function run(){
+  const code = $('#code').value;
+  const iframe = $('#preview');
+  iframe.srcdoc = code;
+  setInfo('Rendered to preview.');
+}
+
+/* ---------------------- Settings ---------------------- */
+function loadSettingsUI(){
+  const k = store.k;
+  $('#openaiKey').value = k.openaiKey || '';
+  $('#openaiModel').value = k.model || 'gpt-4o-mini';
+  $('#relayUrl').value = k.relay || 'http://localhost:8787';
+  $('#remoteDir').value = k.remoteDir || '/public_html';
+  $('#ftpHost').value = k.ftpHost || '';
+  $('#ftpUser').value = k.ftpUser || '';
+  $('#ftpPass').value = k.ftpPass || '';
+  $('#ftpPort').value = k.ftpPort || 21;
+  $('#ftpSecure').value = (k.ftpSecure ?? 'explicit');
+  $('#remoteName').value = k.remoteName || 'index.html';
+}
+
+function saveSettings(){
+  const k = store.k;
+  store.k = {
+    ...k,
+    openaiKey: $('#openaiKey').value.trim(),
+    model: $('#openaiModel').value.trim() || 'gpt-4o-mini',
+    relay: $('#relayUrl').value.trim() || 'http://localhost:8787',
+    remoteDir: $('#remoteDir').value.trim() || '/public_html',
+    ftpHost: $('#ftpHost').value.trim(),
+    ftpUser: $('#ftpUser').value.trim(),
+    ftpPass: $('#ftpPass').value,
+    ftpPort: parseInt($('#ftpPort').value,10) || 21,
+    ftpSecure: $('#ftpSecure').value,
+    remoteName: $('#remoteName').value.trim() || 'index.html',
+  };
+  reflectStatus();
+}
+
+function reflectStatus(){
+  const k = store.k;
+  const apiOK = !!k.openaiKey;
+  $('#apiDot').className = 'dot ' + (apiOK?'ok':'danger');
+  $('#apiStatus').textContent = apiOK ? `OpenAI: ready (${(k.model||'gpt-4o-mini')})` : 'OpenAI: not configured';
+
+  const ftpOK = !!k.relay && !!k.ftpHost && !!k.ftpUser && !!k.ftpPass;
+  $('#ftpDot').className = 'dot ' + (ftpOK?'ok':'warn');
+  $('#ftpStatus').textContent = ftpOK ? 'FTP: ready via relay' : 'FTP: configure in Settings';
+}
+
+/* ---------------------- OpenAI Ask ---------------------- */
+async function openaiChat(messages, endpoint){
+  const k = store.k;
+  if(!k.openaiKey) throw new Error('OpenAI key missing');
+  const model = k.model || 'gpt-4o-mini';
+  if(endpoint==='responses'){
+    const res = await fetch('https://api.openai.com/v1/responses', {
+      method:'POST',
+      headers:{ 'Authorization':'Bearer '+k.openaiKey, 'Content-Type':'application/json' },
+      body: JSON.stringify({ model, input: messages.map(m=> (m.role==='user'? m.content : `System/Assistant: ${m.content}`)).join("\n\n") })
+    });
+    if(!res.ok){ throw new Error('Responses API error: '+res.status); }
+    const data = await res.json();
+    // naive extract
+    const text = data?.output?.[0]?.content?.[0]?.text || data?.output_text || JSON.stringify(data);
+    return text;
+  } else {
+    const res = await fetch('https://api.openai.com/v1/chat/completions', {
+      method:'POST',
+      headers:{ 'Authorization':'Bearer '+k.openaiKey, 'Content-Type':'application/json' },
+      body: JSON.stringify({ model, messages })
+    });
+    if(!res.ok){ throw new Error('Chat API error: '+res.status); }
+    const data = await res.json();
+    return data.choices?.[0]?.message?.content?.trim() || JSON.stringify(data);
+  }
+}
+
+function makePrompt(mode, code, userMsg){
+  const base = `You are SIMON, a precise code assistant. Work on the user's web viewer session.\n`+
+  `Mode: ${mode}\n`+
+  `Tasks:\n- Keep code runnable in a single HTML file when possible.\n- If fixing, explain the bug and patch.\n- If optimizing, reduce size safely.\n- If add feature, show exactly what to insert and where.\n`+
+  `Return:\n- A short summary, then a code block with the updated HTML (full file) if changes are significant.\n`+
+  `User request: ${userMsg||'(none)'}\n`+
+  `--- Begin current file ---\n${code}\n--- End current file ---`;
+  return base;
+}
+
+function appendChat(who, text){
+  const div = el('div','msg'+(who==='me'?' me':''));
+  div.textContent = text;
+  $('#chatlog').append(div);
+  div.scrollIntoView({behavior:'smooth', block:'end'});
+}
+
+$('#sendMsg').addEventListener('click', async ()=>{
+  const msg = $('#userMsg').value.trim();
+  if(!msg) return;
+  appendChat('me', msg); $('#userMsg').value='';
+  try{
+    const code = $('#code').value;
+    const mode = $('#aiMode').value;
+    const endpoint = $('#apiEndpoint').value;
+    const prompt = makePrompt(mode, code, msg);
+    const answer = await openaiChat([{role:'user', content: prompt}], endpoint);
+    appendChat('ai', answer);
+  } catch(err){
+    appendChat('ai', 'Error: '+err.message);
+  }
+});
+
+$('#askAI').addEventListener('click', async ()=>{
+  const code = $('#code').value;
+  const mode = $('#aiMode').value;
+  appendChat('me', `(${mode}) Please review my code.`);
+  try{
+    const endpoint = $('#apiEndpoint').value;
+    const prompt = makePrompt(mode, code, '');
+    const answer = await openaiChat([{role:'user', content: prompt}], endpoint);
+    appendChat('ai', answer);
+  } catch(err){
+    appendChat('ai', 'Error: '+err.message);
+  }
+});
+
+/* ---------------------- FTP Deploy via Relay ---------------------- */
+async function deploy(){
+  const k = store.k;
+  if(!k.relay || !k.ftpHost || !k.ftpUser || !k.ftpPass){
+    alert('Configure FTP in Settings first.');
+    return;
+  }
+  const cur = getCurrent();
+  const payload = {
+    host: k.ftpHost, user: k.ftpUser, password: k.ftpPass,
+    port: Number(k.ftpPort||21),
+    secure: k.ftpSecure === 'explicit',
+    remoteDir: k.remoteDir || '/public_html',
+    remoteName: k.remoteName || (cur?.name?.replace(/\s+/g,'-').toLowerCase()+'.html') || 'index.html',
+    content: btoa(unescape(encodeURIComponent($('#code').value)))
+  };
+  try{
+    setInfo('Uploading via relay…');
+    const res = await fetch((k.relay||'') + '/upload', {
+      method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload)
+    });
+    const data = await res.json();
+    if(!res.ok) throw new Error(data.error||('HTTP '+res.status));
+    setInfo('Deployed: ' + data.path);
+    appendChat('ai', `✅ Deployed to ${data.path}`);
+  }catch(err){
+    setInfo('Deploy failed.');
+    appendChat('ai', 'Deploy error: '+err.message);
+  }
+}
+
+$('#deployBtn').addEventListener('click', deploy);
+
+/* ---------------------- File ops ---------------------- */
+$('#fileInput').addEventListener('change', async (e)=>{
+  const file = e.target.files[0]; if(!file) return;
+  const text = await file.text();
+  $('#code').value = text; saveCurrent(text); run();
+  e.target.value='';
+});
+
+$('#downloadBtn').addEventListener('click', ()=>{
+  const cur = getCurrent(); const name = (cur?.name?.replace(/\s+/g,'-').toLowerCase()||'session') + '.html';
+  const blob = new Blob([$('#code').value], {type:'text/html'});
+  const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = name; a.click();
+});
+
+$('#duplicateBtn').addEventListener('click', ()=> duplicateCurrent());
+$('#deleteBtn').addEventListener('click', ()=> { const cur=getCurrent(); if(cur && confirm('Delete session "'+cur.name+'"?')) deleteSession(cur.id) });
+
+/* ---------------------- Modal wiring ---------------------- */
+$('#btnSettings').addEventListener('click', ()=>{ loadSettingsUI(); $('#modal').classList.add('show') });
+$('#closeSettings').addEventListener('click', ()=> $('#modal').classList.remove('show'));
+$('#saveSettings').addEventListener('click', ()=>{ saveSettings(); $('#modal').classList.remove('show') });
+
+/* Export/Import/Clear */
+$('#exportSessions').addEventListener('click', ()=>{
+  const data = { sessions: store.sessions, current: store.current, k: store.k };
+  const blob = new Blob([JSON.stringify(data,null,2)], {type:'application/json'});
+  const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = 'simon-webviewer-sessions.json'; a.click();
+});
+$('#importSessions').addEventListener('click', ()=> $('#importFile').click());
+$('#importFile').addEventListener('change', async (e)=>{
+  const file = e.target.files[0]; if(!file) return;
+  const json = JSON.parse(await file.text());
+  if(json.sessions) store.sessions = json.sessions;
+  if(json.current) store.current = json.current;
+  if(json.k) store.k = json.k;
+  refreshActive(); reflectStatus();
+});
+$('#clearAll').addEventListener('click', ()=>{
+  if(confirm('This will erase all sessions and settings on this device. Continue?')){
+    localStorage.removeItem('simon-webviewer-sessions');
+    localStorage.removeItem('simon-webviewer-current');
+    localStorage.removeItem('simon-webviewer-k');
+    location.reload();
+  }
+});
+
+/* ---------------------- Autosave ---------------------- */
+let t;
+$('#code').addEventListener('input', ()=>{
+  clearTimeout(t);
+  t = setTimeout(()=> saveCurrent($('#code').value), 300);
+});
+
+/* ---------------------- Init ---------------------- */
+ensureDefault(); renderSessions(); reflectStatus();
+$('#btnRun').addEventListener('click', run);
+$('#btnSave').addEventListener('click', ()=> saveCurrent($('#code').value));
+window.addEventListener('load', run);
+</script>
+</body>
+</html>
